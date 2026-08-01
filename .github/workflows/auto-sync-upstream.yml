@@ -1,0 +1,69 @@
+name: 自动同步上游并编译 (Auto Sync Upstream)
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 每天 UTC 02:00 (北京时间 10:00) 自动检查
+  workflow_dispatch: # 支持手动触发
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码 (完整提交历史)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 配置 Git 用户信息
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 检查并同步上游仓库
+        id: sync_check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. 添加上游仓库
+          git remote add upstream https://github.com/Zephyruso/zashboard.git
+          git fetch upstream main
+
+          # 2. 检查上游是否有新提交
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+
+          echo "上游最新 Commit: $UPSTREAM_HEAD"
+          echo "当前 Merge Base: $MERGE_BASE"
+
+          if [ "$UPSTREAM_HEAD" = "$MERGE_BASE" ]; then
+            echo "上游仓库未发生更新，跳过同步与编译。"
+            echo "updated=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "检测到上游有新代码更新，开始变基 (Rebase)..."
+
+          # 3. 将我们自定义的 Commit Rebase 到上游最新 Commit 之上
+          if ! git rebase upstream/main; then
+            echo "::error::Rebase 过程产生冲突！自动同步中断，请手动解决冲突。"
+            git rebase --abort
+            exit 1
+          fi
+
+          echo "Rebase 成功，准备强制推送到 origin/main..."
+          git push origin main --force
+
+          echo "updated=true" >> $GITHUB_OUTPUT
+
+      - name: 触发编译发布 Workflow
+        if: steps.sync_check.outputs.updated == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "检测到代码已更至最新，自动触发编译 Workflow..."
+          gh workflow run manual-release.yml --repo ${{ github.repository }} -f tag_name=latest
