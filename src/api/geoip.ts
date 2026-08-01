@@ -1,5 +1,5 @@
 import { IP_INFO_API, LANG } from '@/constant'
-import { geoipASNDatabaseURL, geoipCountryDatabaseURL, IPInfoAPI, language } from '@/store/settings'
+import { customIPAPIKey, geoipASNDatabaseURL, geoipCountryDatabaseURL, IPInfoAPI, language } from '@/store/settings'
 import { watchDebounced } from '@vueuse/core'
 import { Buffer } from 'buffer'
 import * as ipaddr from 'ipaddr.js'
@@ -113,6 +113,161 @@ const getIPFromIPapiisAPI = async (ip = '') => {
     | {
         error: string
       }
+}
+
+const CUSTOM_IP_API_BASE_URL = 'https://my-ipapi.xiaoxizicute.workers.dev/'
+
+export interface CustomIPAPIResponse {
+  ip: string
+  geo: {
+    rir: string
+    continent: string
+    continent_en: string
+    continent_code: string
+    country: string
+    country_en: string
+    country_code: string
+    region: string
+    region_en: string
+    city: string
+    city_en: string
+    district: string
+    district_en: string
+    longitude: string
+    latitude: string
+    timezone: string
+    carrier: string
+    org: string
+    org_en: string
+    isp: string
+    asn: string
+    domain: string
+    is_anycast: boolean
+  }
+  privacy: {
+    type: string
+    is_datacenter: boolean
+    is_anonymous: boolean
+    is_icloud_relay: boolean
+    is_tor: boolean
+    is_known_bot: boolean
+  }
+  threat_intelligence: {
+    is_threat: boolean
+    last_seen?: string
+    first_seen?: string
+    recent_abuse?: string[]
+    history_abuse?: string[]
+  }
+  proxy_intelligence: {
+    is_proxy: boolean
+    source_list?: string
+    source_count?: number
+    last_seen?: string
+    first_seen?: string
+    active_days_7d?: number
+    active_days_30d?: number
+    active_days_90d?: number
+    num_days_seen?: number
+  }
+}
+
+export const getIPFromCustomAPI = async (ip: string): Promise<CustomIPAPIResponse> => {
+  const key = customIPAPIKey.value
+  if (!key) {
+    throw new Error('Custom IP API key is not configured')
+  }
+  const response = await fetch(
+    `${CUSTOM_IP_API_BASE_URL}?key=${encodeURIComponent(key)}&ip=${encodeURIComponent(ip)}&t=${Date.now()}`,
+  )
+  if (!response.ok) {
+    throw new Error(`Custom IP API request failed: ${response.status}`)
+  }
+  return (await response.json()) as CustomIPAPIResponse
+}
+
+const useChineseGeo = () => {
+  return language.value === LANG.ZH_CN || language.value === LANG.ZH_TW
+}
+
+export const customAPIResponseToIPInfo = (resp: CustomIPAPIResponse): IPInfo => {
+  const cn = useChineseGeo()
+  return {
+    ip: resp.ip,
+    country: cn ? resp.geo.country : resp.geo.country_en,
+    region: cn ? resp.geo.region : resp.geo.region_en,
+    city: cn ? resp.geo.city : resp.geo.city_en,
+    asn: resp.geo.asn.replace(/^AS/i, ''),
+    organization: cn ? resp.geo.org : resp.geo.org_en,
+    latitude: coordinate(Number(resp.geo.latitude)),
+    longitude: coordinate(Number(resp.geo.longitude)),
+  }
+}
+
+export interface MultiSourceIPResult {
+  custom: CustomIPAPIResponse | null
+  ipsb: IPInfo | null
+  ipwhois: IPInfo | null
+  ipapi: IPInfo | null
+}
+
+const ipsbToIPInfo = (resp: Awaited<ReturnType<typeof getIPFromIpsbAPI>>): IPInfo => ({
+  ip: resp.ip,
+  country: resp.country ?? '',
+  region: resp.region ?? '',
+  city: resp.city ?? '',
+  asn: resp.asn?.toString() ?? '',
+  organization: resp.organization ?? resp.asn_organization ?? '',
+  latitude: coordinate(resp.latitude),
+  longitude: coordinate(resp.longitude),
+})
+
+const ipwhoisToIPInfo = (resp: Awaited<ReturnType<typeof getIPFromIPWhoisAPI>>): IPInfo => {
+  if (!resp.success) {
+    throw new Error(`IPWhois lookup failed: ${resp.message}`)
+  }
+  return {
+    ip: resp.ip,
+    region: resp.region ?? '',
+    country: resp.country ?? '',
+    city: resp.city ?? '',
+    asn: resp.connection?.asn?.toString() ?? '',
+    organization: resp.connection?.org ?? '',
+    latitude: coordinate(resp.latitude),
+    longitude: coordinate(resp.longitude),
+  }
+}
+
+const ipapiToIPInfo = (resp: Awaited<ReturnType<typeof getIPFromIPapiisAPI>>): IPInfo => {
+  if ('error' in resp) {
+    throw new Error(`ipapi.is lookup failed: ${resp.error}`)
+  }
+  return {
+    ip: resp.ip,
+    country: resp.cc ?? '',
+    region: '',
+    city: '',
+    asn: resp.asn_num?.toString() ?? '',
+    organization: resp.asn_org ?? resp.company_name ?? '',
+    latitude: coordinate(resp.lat),
+    longitude: coordinate(resp.lon),
+  }
+}
+
+export const getMultiSourceIPInfo = async (ip: string): Promise<MultiSourceIPResult> => {
+  const [custom, ipsb, ipwhois, ipapi] = await Promise.allSettled([
+    getIPFromCustomAPI(ip),
+    getIPFromIpsbAPI(ip).then(ipsbToIPInfo),
+    getIPFromIPWhoisAPI(ip).then(ipwhoisToIPInfo),
+    getIPFromIPapiisAPI(ip).then(ipapiToIPInfo),
+  ])
+
+  return {
+    custom: custom.status === 'fulfilled' ? custom.value : null,
+    ipsb: ipsb.status === 'fulfilled' ? ipsb.value : null,
+    ipwhois: ipwhois.status === 'fulfilled' ? ipwhois.value : null,
+    ipapi: ipapi.status === 'fulfilled' ? ipapi.value : null,
+  }
 }
 
 export const getIPInfo = async (ip = '', api: IP_INFO_API = IPInfoAPI.value): Promise<IPInfo> => {

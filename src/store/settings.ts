@@ -204,6 +204,7 @@ export const IPInfoAPI = useStorage<IP_INFO_API>('config/geoip-info-api', IP_INF
 if (IPInfoAPI.value === IP_INFO_API.IPIP) {
   IPInfoAPI.value = IP_INFO_API.IPSB
 }
+export const customIPAPIKey = useStorage('config/custom-ip-api-key', '')
 export const geoipCountryDatabaseURL = useStorage(
   'config/geoip-country-database-url',
   GEOIP_COUNTRY_DATABASE_URL,

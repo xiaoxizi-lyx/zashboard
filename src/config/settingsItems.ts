@@ -201,6 +201,11 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         section: 'settingsSectionNetworkData',
       },
       {
+        key: `${SETTINGS_MENU_KEY.general}.customIPAPIKey`,
+        label: 'customIPAPIKey',
+        section: 'settingsSectionNetworkData',
+      },
+      {
         key: `${SETTINGS_MENU_KEY.general}.geoipCountryDatabaseURL`,
         label: 'geoipCountryDatabaseURL',
         section: 'settingsSectionNetworkData',
