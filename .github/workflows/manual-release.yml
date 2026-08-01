@@ -1,0 +1,96 @@
+name: 编译并发布所有版本 (Manual Release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '发布版本号 (例如 latest 或 v1.0.0)'
+        required: true
+        default: 'latest'
+
+permissions:
+  contents: write # 必须要有写入权限才能删除和创建 Release
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+      - name: 配置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: 安装依赖
+        run: pnpm install
+
+      - name: 依次编译所有版本并打包压缩
+        run: |
+          # 1. 完整版
+          echo "编译完整版..."
+          pnpm run build
+          zip -r dist.zip dist
+          rm -rf dist
+
+          # 2. cdn-fonts
+          echo "编译 cdn-fonts..."
+          pnpm run build:cdn-fonts
+          zip -r dist-cdn-fonts.zip dist
+          rm -rf dist
+
+          # 3. no-fonts
+          echo "编译 no-fonts..."
+          pnpm run build:no-fonts
+          zip -r dist-no-fonts.zip dist
+          rm -rf dist
+
+          # 4. firasans-only
+          echo "编译 firasans-only..."
+          pnpm run build:firasans-only
+          zip -r dist-firasans-only.zip dist
+          rm -rf dist
+
+          # 5. misans-only
+          echo "编译 misans-only..."
+          pnpm run build:misans-only
+          zip -r dist-misans-only.zip dist
+          rm -rf dist
+
+          # 6. pingfang-only
+          echo "编译 pingfang-only..."
+          pnpm run build:pingfang-only
+          zip -r dist-pingfang-only.zip dist
+          rm -rf dist
+
+          # 7. sarasa-only
+          echo "编译 sarasa-only..."
+          pnpm run build:sarasa-only
+          zip -r dist-sarasa-only.zip dist
+          rm -rf dist
+
+      - name: 删除旧的同名 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 尝试删除同名的 release 及其标签，如果不存在则忽略报错继续执行 (|| true)
+          gh release delete "${{ github.event.inputs.tag_name }}" --cleanup-tag -y || true
+
+      - name: 创建并上传最新的 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name }}
+          name: Zashboard 自定义打包 (${{ github.event.inputs.tag_name }})
+          body: "这是由 GitHub Actions 手动触发自动编译并上传的最新版本。"
+          files: |
+            dist.zip
+            dist-cdn-fonts.zip
+            dist-no-fonts.zip
+            dist-firasans-only.zip
+            dist-misans-only.zip
+            dist-pingfang-only.zip
+            dist-sarasa-only.zip
