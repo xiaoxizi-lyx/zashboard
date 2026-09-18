@@ -112,7 +112,7 @@ import {
 import { notifyRequestError } from '@/helper/requestError'
 import { useTooltip } from '@/helper/tooltip'
 import { proxyGroupList } from '@/assembly/proxies'
-import { fetchRules, rulesFilter, updateRuleProviderAPI } from '@/assembly/rules'
+import { fetchRules, rulesFilter, updateRuleProvider } from '@/assembly/rules'
 import { displayLatencyInRule, displayNowNodeInRule } from '@/store/settings'
 import type { Rule } from '@/types'
 import {
@@ -171,7 +171,7 @@ const updateRuleProviderClickHandler = async () => {
 
   isUpdating.value = true
   try {
-    await updateRuleProviderAPI(props.rule.payload)
+    await updateRuleProvider(props.rule.payload)
     await fetchRules()
   } catch (e) {
     notifyRequestError(e)

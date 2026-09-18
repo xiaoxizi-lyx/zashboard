@@ -1,7 +1,7 @@
 import {
-  disconnectByIdAPI,
-  fetchConnectionsAPI,
+  disconnectById,
   getConnectionVisibleSearchValues,
+  subscribeConnections,
 } from '@/assembly/connections'
 import {
   CONNECTION_SEARCHABLE_KEYS,
@@ -79,7 +79,7 @@ let cancel: (() => void) | undefined
 export const initConnections = () => {
   stopConnections()
   initAggregatedDataMap()
-  const ws = fetchConnectionsAPI()
+  const ws = subscribeConnections()
   const unwatch = watch(ws.data, (snapshot) => {
     if (!snapshot) return
 
@@ -109,7 +109,7 @@ export const initConnections = () => {
           const start = dayjs(getConnectionStart(conn))
 
           if (now.diff(start, 'minute') > autoDisconnectIdleUDPTime.value) {
-            disconnectByIdAPI(conn.id).catch(() => {})
+            disconnectById(conn.id).catch(() => {})
           }
         })
     })

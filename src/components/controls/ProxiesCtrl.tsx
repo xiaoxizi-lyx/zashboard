@@ -7,7 +7,7 @@ import {
   proxiesTabShow,
   proxyGroupList,
   proxyProviederList,
-  updateProxyProviderAPI,
+  updateProxyProvider,
 } from '@/assembly/proxies'
 import { renderProxiesPageItems } from '@/composables/proxies'
 import { isProxyNodeSearchMode, toggleProxySearchMode } from '@/composables/proxySearch'
@@ -62,7 +62,7 @@ export default defineComponent({
       isUpgrading.value = true
       try {
         await Promise.all(
-          proxyProviederList.value.map((provider) => updateProxyProviderAPI(provider.name)),
+          proxyProviederList.value.map((provider) => updateProxyProvider(provider.name)),
         )
         await fetchProxies()
         isUpgrading.value = false

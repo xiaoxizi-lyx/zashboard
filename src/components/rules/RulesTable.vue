@@ -56,7 +56,7 @@ import {
   rules,
   rulesFilter,
   rulesTabShow,
-  updateRuleProviderAPI,
+  updateRuleProvider,
 } from '@/assembly/rules'
 import {
   EMPTY_CELL,
@@ -128,7 +128,7 @@ const updateProviderHandler = async (name: string) => {
 
   updatingProviders.value.push(name)
   try {
-    await updateRuleProviderAPI(name)
+    await updateRuleProvider(name)
     await fetchRules()
   } catch (e) {
     notifyRequestError(e)

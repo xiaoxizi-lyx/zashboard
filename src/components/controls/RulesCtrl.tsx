@@ -4,7 +4,7 @@ import {
   rules,
   rulesFilter,
   rulesTabShow,
-  updateRuleProviderAPI,
+  updateRuleProvider,
 } from '@/assembly/rules'
 import { useCtrlsBar } from '@/composables/useCtrlsBar'
 import { LIST_DISPLAY_STYLE, RULE_TAB_TYPE } from '@/constant'
@@ -43,7 +43,7 @@ export default defineComponent({
 
         await Promise.all(
           ruleProviderList.value.map((provider) =>
-            updateRuleProviderAPI(provider.name).then(() => {
+            updateRuleProvider(provider.name).then(() => {
               updateCount++
 
               const isFinished = updateCount === ruleProviderList.value.length

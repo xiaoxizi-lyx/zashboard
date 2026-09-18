@@ -1,4 +1,4 @@
-import { disconnectAllAPI, disconnectByIdAPI } from '@/assembly/connections'
+import { disconnectAll, disconnectById } from '@/assembly/connections'
 import {
   hasConnectionCardGroups,
   hasExpandedConnectionCardGroups,
@@ -59,10 +59,10 @@ import SourceIPFilter from './SourceIPFilter.vue'
 
 const handlerClickCloseAll = () => {
   if (renderConnections.value.length === connections.value.length) {
-    disconnectAllAPI()
+    disconnectAll()
   } else {
     renderConnections.value.forEach((conn) => {
-      disconnectByIdAPI(conn.id)
+      disconnectById(conn.id)
     })
   }
 }

@@ -335,7 +335,7 @@
 <script setup lang="ts">
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SelectInput from '@/components/common/SelectInput.vue'
-import { queryDNSAPI } from '@/assembly/config'
+import { queryDNS } from '@/assembly/config'
 import { getPublicIPInfo, type IPInfo } from '@/api/geoip'
 import { getCachedPublicIPInfo } from '@/composables/overview'
 import { IP_INFO_API } from '@/constant'
@@ -502,7 +502,7 @@ const resolveHostname = (hostname: string) => {
       { type: 'AAAA', answerType: 28 },
     ]) {
       try {
-        const { data } = await queryDNSAPI({ name: hostname, type })
+        const data = await queryDNS({ name: hostname, type })
 
         for (const answer of data.Answer ?? []) {
           const ip = answer.type === answerType ? normalizeIP(answer.data) : null

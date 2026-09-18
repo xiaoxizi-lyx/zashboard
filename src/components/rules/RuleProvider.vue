@@ -45,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { updateRuleProviderAPI } from '@/assembly/rules'
+import { updateRuleProvider } from '@/assembly/rules'
 import HighlightText from '@/components/common/HighlightText.vue'
 import { useBounceOnVisible } from '@/composables/bouncein'
 import { notifyRequestError } from '@/helper/requestError'
@@ -66,7 +66,7 @@ const updateRuleProviderClickHandler = async () => {
 
   isUpdating.value = true
   try {
-    await updateRuleProviderAPI(props.ruleProvider.name)
+    await updateRuleProvider(props.ruleProvider.name)
     await fetchRules()
   } catch (e) {
     notifyRequestError(e)

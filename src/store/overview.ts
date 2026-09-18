@@ -1,4 +1,4 @@
-import { fetchMemoryAPI, fetchTrafficAPI } from '@/assembly/overview'
+import { memoryStream, trafficStream } from '@/assembly/overview'
 import { ref, watch } from 'vue'
 import { activeConnections, downloadTotal, uploadTotal } from './connections'
 
@@ -36,9 +36,7 @@ let cancel: (() => void) | undefined
 export const initSatistic = () => {
   stopSatistic()
 
-  const { data: memoryWsData, close: memoryWsClose } = fetchMemoryAPI<{
-    inuse: number
-  }>()
+  const { data: memoryWsData, close: memoryWsClose } = memoryStream()
   const unwatchMemory = watch(
     () => memoryWsData.value,
     (data) => {
@@ -64,12 +62,7 @@ export const initSatistic = () => {
     },
   )
 
-  const { data: trafficWsData, close: trafficWsClose } = fetchTrafficAPI<{
-    down: number
-    up: number
-    downTotal?: number
-    upTotal?: number
-  }>()
+  const { data: trafficWsData, close: trafficWsClose } = trafficStream()
   const unwatchTraffic = watch(
     () => trafficWsData.value,
     (data) => {

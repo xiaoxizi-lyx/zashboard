@@ -1,4 +1,4 @@
-import { fetchSmartWeightsAPI } from '@/assembly/proxies'
+import { fetchSmartWeights } from '@/assembly/proxies'
 import type { NodeRank } from '@/types'
 import { ref } from 'vue'
 
@@ -22,7 +22,7 @@ export const initSmartWeights = async () => {
   let smartWeights: Record<string, NodeRank[]> | null = null
 
   try {
-    smartWeights = (await fetchSmartWeightsAPI()).data.weights
+    smartWeights = await fetchSmartWeights()
   } catch {
     smartWeights = null
   }

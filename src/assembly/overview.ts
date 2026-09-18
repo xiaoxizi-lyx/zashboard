@@ -1,7 +1,11 @@
-import { fetchHonkStatsAPI } from '@/api/clash'
-import { can } from '@/assembly/backend'
 import type { HonkStats } from '@/types'
 import { shallowRef } from 'vue'
+import { can } from './backend'
+import { driver } from './driver'
+
+export const trafficStream = () => driver().metrics.traffic()
+
+export const memoryStream = () => driver().metrics.memory()
 
 export const honkStats = shallowRef<HonkStats>()
 
@@ -16,9 +20,7 @@ export const fetchHonkStats = async () => {
   }
 
   try {
-    const { data } = await fetchHonkStatsAPI()
-
-    honkStats.value = data
+    honkStats.value = await driver().metrics.fetchRuntimeStats()
   } catch {
     honkStats.value = undefined
   }
