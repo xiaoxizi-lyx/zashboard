@@ -1,0 +1,105 @@
+name: 自动同步上游并编译 (Auto Sync Upstream)
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 每天 UTC 02:00 (北京时间 10:00) 自动检查
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '上游无更新时也强制编译发布'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: Zephyruso/zashboard
+  UPSTREAM_BRANCH: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      updated: ${{ steps.sync.outputs.updated }}
+      sha: ${{ steps.sync.outputs.sha }}
+    steps:
+      - name: 检查 SYNC_TOKEN
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          # GITHUB_TOKEN 无法推送修改了 .github/workflows 的提交，上游一改 workflow 就会推送失败
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::未配置 SYNC_TOKEN secret（需要 Contents 与 Workflows 读写权限的 PAT）"
+            exit 1
+          fi
+
+      - name: 检出代码 (完整提交历史)
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: 配置 Git 用户信息
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 检查并同步上游仓库
+        id: sync
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+          OLD_SHA=$(git rev-parse HEAD)
+          echo "上游最新 Commit: $(git rev-parse upstream/$UPSTREAM_BRANCH)"
+          echo "当前 Commit: $OLD_SHA"
+
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "上游仓库未发生更新，跳过同步。"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "sha=$OLD_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "检测到上游有新代码，开始变基 (Rebase)..."
+          echo "待变基的自定义提交："
+          git log --oneline "upstream/$UPSTREAM_BRANCH..HEAD"
+
+          # 把所有不在上游的自定义提交变基到上游最新提交之上
+          if ! git rebase "upstream/$UPSTREAM_BRANCH"; then
+            echo "::error::Rebase 产生冲突，自动同步中断，请在本地手动解决。冲突文件："
+            git diff --name-only --diff-filter=U
+            git rebase --abort
+            exit 1
+          fi
+
+          # 只在远端 main 仍是检出时的提交时才覆盖，避免冲掉期间的手动推送
+          git push --force-with-lease="main:$OLD_SHA" origin HEAD:main
+
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 保持定时任务启用
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 公开仓库 60 天无活动会自动停用定时 workflow，每次运行时重新启用以续期
+          gh workflow enable auto-sync-upstream.yml --repo "$GITHUB_REPOSITORY" || true
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.updated == 'true' || inputs.force_build
+    uses: ./.github/workflows/manual-release.yml
+    with:
+      tag_name: latest
+      ref: ${{ needs.sync.outputs.sha }}
+    secrets: inherit
+    permissions:
+      contents: write

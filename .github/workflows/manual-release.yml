@@ -1,0 +1,85 @@
+name: 编译并发布所有版本 (Manual Release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '发布版本号 (例如 latest 或 v1.0.0)'
+        required: true
+        default: 'latest'
+  workflow_call:
+    inputs:
+      tag_name:
+        type: string
+        default: 'latest'
+      ref:
+        description: '要编译的提交，默认为触发 workflow 的提交'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ inputs.tag_name }}
+      cancel-in-progress: false
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          # 用 PAT 推送标签，GITHUB_TOKEN 无法推送指向含 workflow 改动的提交
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v6
+      - name: 配置 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 依次编译所有版本并打包压缩
+        run: |
+          for font in all cdn none firasans misans pingfang sarasa; do
+            case "$font" in
+              all) suffix='' ;;
+              cdn) suffix='-cdn-fonts' ;;
+              none) suffix='-no-fonts' ;;
+              *) suffix="-${font}-only" ;;
+            esac
+            echo "::group::编译 dist${suffix}"
+            FONT="$font" pnpm run build
+            zip -qr "dist${suffix}.zip" dist
+            rm -rf dist
+            echo "::endgroup::"
+          done
+          ls -lh dist*.zip
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag_name }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          VERSION=$(node -p "require('./package.json').version")
+          TITLE="Zashboard 自定义打包 ($TAG)"
+          NOTES=$(printf '基于上游 v%s 自动编译。\n\nCommit: %s' "$VERSION" "$SHA")
+
+          # 先把标签移到本次编译的提交
+          git tag -f "$TAG" "$SHA"
+          git push -f origin "refs/tags/$TAG"
+
+          # 已存在则原地覆盖文件，避免先删后建期间下载链接失效
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist*.zip --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --latest
+          else
+            gh release create "$TAG" dist*.zip --title "$TITLE" --notes "$NOTES" --latest
+          fi
