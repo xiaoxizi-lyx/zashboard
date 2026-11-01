@@ -83,6 +83,42 @@
         />
       </SettingItem>
       <SettingItem
+        :setting-key="k.customIPAPIBaseURL"
+        class="max-sm:flex-col max-sm:items-start! max-sm:py-3"
+      >
+        <div class="setting-item-label">
+          {{ $t('customIPAPIBaseURL') }}
+          <QuestionMarkCircleIcon
+            class="h-4 w-4 cursor-pointer"
+            @mouseenter="showTip($event, $t('customIPAPIBaseURLTip'))"
+          />
+        </div>
+        <TextInput
+          v-model="customIPAPIBaseURL"
+          class="w-full flex-2"
+          :clearable="true"
+          :placeholder="$t('customIPAPIBaseURLPlaceholder')"
+        />
+      </SettingItem>
+      <SettingItem
+        :setting-key="k.customIPAPIKey"
+        class="max-sm:flex-col max-sm:items-start! max-sm:py-3"
+      >
+        <div class="setting-item-label">
+          {{ $t('customIPAPIKey') }}
+          <QuestionMarkCircleIcon
+            class="h-4 w-4 cursor-pointer"
+            @mouseenter="showTip($event, $t('customIPAPIKeyTip'))"
+          />
+        </div>
+        <TextInput
+          v-model="customIPAPIKey"
+          class="w-full flex-2"
+          :clearable="true"
+          :placeholder="$t('customIPAPIKeyPlaceholder')"
+        />
+      </SettingItem>
+      <SettingItem
         :setting-key="k.geoipCountryDatabaseURL"
         class="max-sm:flex-col max-sm:items-start! max-sm:py-3"
       >
@@ -212,6 +248,7 @@ import { notifyActionPending } from '@/helper/notification'
 import { notifyRequestError } from '@/helper/request-error'
 import { useTooltip } from '@/composables/use-tooltip'
 import { isMiddleScreen } from '@/helper/utils'
+import { customIPAPIBaseURL, customIPAPIKey } from '@/store/custom-settings'
 import {
   autoDisconnectIdleUDP,
   autoDisconnectIdleUDPTime,
@@ -238,6 +275,8 @@ const isVisibleAutoUpgrade = useIsSettingVisible(k.autoUpgradeDashboard)
 const isVisibleAutoDisconnectIdleUDP = useIsSettingVisible(k.autoDisconnectIdleUDP)
 const isVisibleAutoDisconnectIdleUDPTime = useIsSettingVisible(k.autoDisconnectIdleUDPTime)
 const isVisibleIPInfoAPI = useIsSettingVisible(k.IPInfoAPI)
+const isVisibleCustomIPAPIBaseURL = useIsSettingVisible(k.customIPAPIBaseURL)
+const isVisibleCustomIPAPIKey = useIsSettingVisible(k.customIPAPIKey)
 const isVisibleGeoipCountryDatabaseURL = useIsSettingVisible(k.geoipCountryDatabaseURL)
 const isVisibleGeoipASNDatabaseURL = useIsSettingVisible(k.geoipASNDatabaseURL)
 const isVisibleScrollAnimationEffect = useIsSettingVisible(k.scrollAnimationEffect)
@@ -258,6 +297,8 @@ const hasVisibleNetworkItems = computed(
     isVisibleAutoDisconnectIdleUDP.value ||
     (autoDisconnectIdleUDP.value && isVisibleAutoDisconnectIdleUDPTime.value) ||
     isVisibleIPInfoAPI.value ||
+    isVisibleCustomIPAPIBaseURL.value ||
+    isVisibleCustomIPAPIKey.value ||
     isVisibleGeoipCountryDatabaseURL.value ||
     isVisibleGeoipASNDatabaseURL.value,
 )

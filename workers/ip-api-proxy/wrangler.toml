@@ -1,0 +1,9 @@
+name = "my-ipapi"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# UPSTREAM_URL is set in the Cloudflare dashboard or with `wrangler secret put UPSTREAM_URL`,
+# not here, so the upstream address stays out of the repository.
+# Keep variables added in the dashboard when deploying with wrangler.
+keep_vars = true

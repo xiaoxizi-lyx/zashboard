@@ -1,0 +1,341 @@
+name: 自动同步上游并编译 (Auto Sync Upstream)
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 每天 UTC 02:00 (北京时间 10:00) 自动检查
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Release 已是最新时也重新编译发布'
+        type: boolean
+        default: false
+      tag_name:
+        description: '发布版本号 (例如 latest 或 v1.0.0)'
+        default: 'latest'
+
+permissions: {}
+
+concurrency:
+  group: auto-sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: Zephyruso/zashboard
+  UPSTREAM_BRANCH: main
+  TAG: ${{ inputs.tag_name || 'latest' }}
+  # 记录上次同步到的上游提交，上游改写历史（amend 后强推）时据此区分自定义提交
+  BASE_TAG: upstream-base
+  # 编译产物同时推送到该分支，供 jsDelivr 加速下载（GitHub Release 需直连 GitHub）
+  DIST_BRANCH: dist
+
+jobs:
+  sync:
+    name: 同步上游
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      sha: ${{ steps.sync.outputs.sha }}
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - name: 检查 SYNC_TOKEN
+        id: token
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          # GITHUB_TOKEN 无法推送修改了 .github/workflows 的提交，上游一改 workflow 就会推送失败
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::未配置 SYNC_TOKEN secret（需要 Contents 与 Workflows 读写权限的 PAT）"
+            echo "❌ 未配置 \`SYNC_TOKEN\` secret（需要 Contents 与 Workflows 读写权限的 PAT），无法同步。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if ! gh api -i "repos/$GITHUB_REPOSITORY" > "$RUNNER_TEMP/token-check.txt" 2>&1; then
+            echo "::error::SYNC_TOKEN 无效或已过期"
+            echo "❌ \`SYNC_TOKEN\` 无效或已过期，请重新生成 PAT 并更新 secret。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # PAT 快到期时提前提醒，避免到期后同步静默中断
+          EXPIRY=$(grep -i '^github-authentication-token-expiration:' "$RUNNER_TEMP/token-check.txt" | cut -d' ' -f2- | tr -d '\r')
+          if [ -n "$EXPIRY" ] && EXPIRY_TS=$(date -d "$EXPIRY" +%s 2> /dev/null); then
+            DAYS_LEFT=$(((EXPIRY_TS - $(date +%s)) / 86400))
+            if [ "$DAYS_LEFT" -lt 14 ]; then
+              echo "::warning::SYNC_TOKEN 将在 $DAYS_LEFT 天后过期"
+              echo "⚠️ \`SYNC_TOKEN\` 将在 **$DAYS_LEFT 天后**过期（$EXPIRY），请及时重新生成并更新 secret。" >> "$GITHUB_STEP_SUMMARY"
+              echo >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: 检出代码 (完整提交历史)
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: 配置 Git 用户信息
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 检查并同步上游仓库
+        id: sync
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          if ! git fetch --no-tags upstream "$UPSTREAM_BRANCH"; then
+            echo "::error::无法获取上游仓库 $UPSTREAM_REPO"
+            echo "❌ 无法获取上游仓库 \`$UPSTREAM_REPO\`，同步中断，Release 未更新。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          OLD_SHA=$(git rev-parse HEAD)
+          BEHIND=$(git rev-list --count "HEAD..upstream/$UPSTREAM_BRANCH")
+          echo "上游最新 Commit: $(git rev-parse "upstream/$UPSTREAM_BRANCH")"
+          echo "当前 Commit: $OLD_SHA"
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "上游仓库未发生更新，跳过同步。"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "sha=$OLD_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "检测到上游有 $BEHIND 个新提交，开始变基 (Rebase)..."
+
+          # 上游改写历史后，旧的上游提交不再属于上游，直接变基会把它们当成自定义提交重放而冲突，
+          # 此时只重放上次同步的上游提交之后的提交
+          REBASE_ARGS=("upstream/$UPSTREAM_BRANCH")
+          CUSTOM_RANGE="upstream/$UPSTREAM_BRANCH..HEAD"
+          if LAST_BASE=$(git rev-parse -q --verify "refs/tags/$BASE_TAG^{commit}") \
+            && git merge-base --is-ancestor "$LAST_BASE" HEAD \
+            && ! git merge-base --is-ancestor "$LAST_BASE" "upstream/$UPSTREAM_BRANCH"; then
+            echo "::warning::上游改写了历史，上次同步的上游提交 ${LAST_BASE:0:7} 之前的旧上游提交将被丢弃"
+            REBASE_ARGS=(--onto "upstream/$UPSTREAM_BRANCH" "$LAST_BASE")
+            CUSTOM_RANGE="$LAST_BASE..HEAD"
+          fi
+
+          echo "待变基的自定义提交："
+          git log --oneline "$CUSTOM_RANGE"
+
+          # 记录上游新提交，供 Job summary 使用
+          {
+            echo "<details><summary>上游新提交</summary>"
+            echo
+            git log -n 20 --format="- [\`%h\`](https://github.com/${UPSTREAM_REPO}/commit/%H) %s" "HEAD..upstream/$UPSTREAM_BRANCH" | sed 's/</\&lt;/g'
+            if [ "$BEHIND" -gt 20 ]; then
+              echo "- …… 共 $BEHIND 个"
+            fi
+            echo
+            echo "</details>"
+          } > "$RUNNER_TEMP/upstream-commits.md"
+
+          # 把所有不在上游的自定义提交变基到上游最新提交之上
+          if ! git rebase "${REBASE_ARGS[@]}"; then
+            echo "::error::Rebase 产生冲突，自动同步中断，请在本地手动解决。"
+            {
+              echo "❌ 上游有 $BEHIND 个新提交，但变基 (Rebase) 产生冲突，同步中断，Release 未更新。"
+              echo
+              echo "冲突文件："
+              echo
+              git diff --name-only --diff-filter=U | sed 's/.*/- `&`/'
+              echo
+              echo "请在本地执行 \`git fetch upstream && git rebase upstream/$UPSTREAM_BRANCH\`，解决冲突后强制推送。"
+              echo
+              cat "$RUNNER_TEMP/upstream-commits.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+            git rebase --abort
+            exit 1
+          fi
+
+          # 只在远端 main 仍是检出时的提交时才覆盖，避免冲掉期间的手动推送
+          if ! git push --force-with-lease="main:$OLD_SHA" origin HEAD:main; then
+            echo "::error::变基成功，但推送到 main 失败"
+            {
+              echo "❌ 上游有 $BEHIND 个新提交，变基成功，但推送到 \`main\` 失败，Release 未更新。"
+              echo
+              echo "可能原因：运行期间 \`main\` 有新的推送（下次运行会自动重试），或 \`SYNC_TOKEN\` 缺少 Contents / Workflows 写权限。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # 标签更新失败不影响本次同步，只是下次遇到上游改写历史时无法自动处理
+          if ! git push -f origin "$(git rev-parse "upstream/$UPSTREAM_BRANCH"):refs/tags/$BASE_TAG"; then
+            echo "::warning::更新 $BASE_TAG 标签失败"
+          fi
+
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 判断是否需要编译
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATED: ${{ steps.sync.outputs.updated }}
+          BEHIND: ${{ steps.sync.outputs.behind }}
+          FORCE_BUILD: ${{ inputs.force_build }}
+        run: |
+          HEAD_SHA=$(git rev-parse HEAD)
+          # 编译成功后标签才会移到对应提交（dist 分支在此之前已推送），所以标签指向 main 且 Release 存在即代表 Release 是最新的
+          TAG_SHA=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+          RELEASE_EXISTS=false
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            RELEASE_EXISTS=true
+          fi
+          DIST_EXISTS=false
+          if [ -n "$(git ls-remote origin "refs/heads/$DIST_BRANCH")" ]; then
+            DIST_EXISTS=true
+          fi
+
+          BUILD=true
+          if [ "$UPDATED" = "true" ]; then
+            MSG="🔄 上游有 $BEHIND 个新提交，已变基并推送到 \`main\`（\`${HEAD_SHA:0:7}\`），开始编译"
+          elif [ "$RELEASE_EXISTS" != "true" ]; then
+            MSG="🔨 上游无更新，但 Release \`$TAG\` 尚不存在，开始编译"
+          elif [ "$DIST_EXISTS" != "true" ]; then
+            MSG="🔨 上游无更新，但 \`$DIST_BRANCH\` 分支尚不存在，开始编译"
+          elif [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            MSG="🔨 上游无更新，但 Release \`$TAG\`（\`${TAG_SHA:0:7}\`）与 \`main\`（\`${HEAD_SHA:0:7}\`）不一致，开始编译"
+          elif [ "$FORCE_BUILD" = "true" ]; then
+            MSG="🔨 上游无更新，Release 已是最新，已勾选强制编译，重新编译"
+          else
+            BUILD=false
+            MSG="✅ 上游无更新，Release 已是最新，跳过编译"
+          fi
+
+          echo "$MSG"
+          echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$UPDATED" = "true" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/upstream-commits.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+      - name: 保持定时任务启用
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 公开仓库 60 天无活动会自动停用定时 workflow，每次运行时重新启用以续期
+          gh workflow enable auto-sync-upstream.yml --repo "$GITHUB_REPOSITORY" || true
+
+      - name: 记录失败信息
+        if: failure() && steps.token.outcome != 'failure' && steps.sync.outcome != 'failure'
+        run: echo "❌ 同步流程意外失败，Release 未更新，请查看运行日志。" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: 编译并发布
+    needs: sync
+    if: needs.sync.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          # 用 PAT 推送标签，GITHUB_TOKEN 无法推送指向含 workflow 改动的提交
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v6
+      - name: 配置 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 依次编译所有版本并打包压缩
+        run: |
+          for font in all cdn none firasans misans pingfang sarasa; do
+            case "$font" in
+              all) suffix='' ;;
+              cdn) suffix='-cdn-fonts' ;;
+              none) suffix='-no-fonts' ;;
+              *) suffix="-${font}-only" ;;
+            esac
+            echo "::group::编译 dist${suffix}"
+            FONT="$font" pnpm run build
+            zip -qr "dist${suffix}.zip" dist
+            rm -rf dist
+            echo "::endgroup::"
+          done
+          ls -lh dist*.zip
+
+      # 先于 Release 推送：标签最后才移动，中途失败的话下次运行会重新编译并补推
+      - name: 推送到 dist 分支
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          SHA=$(git rev-parse HEAD)
+          VERSION=$(node -p "require('./package.json').version")
+
+          # 每次生成只含压缩包的单个孤立提交并强推，避免历史里堆积旧压缩包撑大仓库
+          TREE=$(for file in dist*.zip; do
+            printf '100644 blob %s\t%s\n' "$(git hash-object -w "$file")" "$file"
+          done | git mktree)
+          COMMIT=$(printf '基于上游 v%s 自动编译\n\nCommit: %s\n' "$VERSION" "$SHA" | git commit-tree "$TREE")
+
+          # 用 GITHUB_TOKEN 推送，推送者记为 github-actions[bot]；用检出时保存的 PAT 推送会算作 PAT 所有者，
+          # 仓库首页会一直对其显示 "dist had recent pushes" 的 PR 提示。先用空值清掉 PAT 的认证头再换上
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git -c http.https://github.com/.extraheader= \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            push -f origin "$COMMIT:refs/heads/$DIST_BRANCH"
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          VERSION=$(node -p "require('./package.json').version")
+          TITLE="Zashboard 自定义打包 ($TAG)"
+          NOTES=$(printf '基于上游 v%s 自动编译。\n\nCommit: %s' "$VERSION" "$SHA")
+
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # 已存在则原地覆盖文件，避免先删后建期间下载链接失效
+            gh release upload "$TAG" dist*.zip --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --latest
+            # 文件全部更新后才移动标签，中途失败的话下次运行会发现 Release 不是最新并重新编译
+            git tag -f "$TAG" "$SHA"
+            git push -f origin "refs/tags/$TAG"
+          else
+            git tag -f "$TAG" "$SHA"
+            git push -f origin "refs/tags/$TAG"
+            gh release create "$TAG" dist*.zip --title "$TITLE" --notes "$NOTES" --latest --verify-tag
+          fi
+
+          {
+            echo "✅ 已编译并发布 Release [\`$TAG\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG)：基于上游 v$VERSION，Commit \`${SHA:0:7}\`"
+            echo
+            echo "| 文件 | 大小 | jsDelivr |"
+            echo "| --- | --- | --- |"
+            for file in dist*.zip; do
+              echo "| \`$file\` | $(du -h "$file" | cut -f1) | [下载](https://cdn.jsdelivr.net/gh/$GITHUB_REPOSITORY@$DIST_BRANCH/$file) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 刷新 jsDelivr 缓存
+        run: |
+          # jsDelivr 对分支链接缓存 12 小时，推送后主动刷新；失败不影响发布，只是 CDN 更新会延迟
+          for file in dist*.zip; do
+            if ! curl -fsS --retry 3 -m 30 -o /dev/null "https://purge.jsdelivr.net/gh/$GITHUB_REPOSITORY@$DIST_BRANCH/$file"; then
+              echo "::warning::刷新 jsDelivr 缓存失败：$file"
+              echo "⚠️ 刷新 jsDelivr 缓存失败：\`$file\`，CDN 最多延迟 12 小时更新。" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: 记录失败信息
+        if: failure()
+        run: echo "❌ 编译或发布失败，Release \`$TAG\` 或 \`$DIST_BRANCH\` 分支未完成更新，下次运行会自动重新编译。" >> "$GITHUB_STEP_SUMMARY"
