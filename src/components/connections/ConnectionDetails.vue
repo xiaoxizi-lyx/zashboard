@@ -49,36 +49,10 @@
             </div>
           </div>
 
-          <div
+          <MultiSourceGeoInfo
             v-if="section.id === 'sourceAndDestination' && showGeoInfo"
-            class="border-base-content/8 bg-base-200/40 rounded-lg border p-3 text-sm"
-          >
-            <div class="text-primary mb-2 font-semibold">{{ $t('geoInfo') }}</div>
-            <div class="flex flex-wrap items-center gap-1">
-              <ArrowRightCircleIcon class="h-4 w-4 shrink-0" />
-              <div>{{ details?.ip }}</div>
-              <div>( AS{{ details?.asn }} )</div>
-            </div>
-            <div class="mt-1 flex flex-wrap">
-              <div
-                class="mr-3 flex items-center gap-1"
-                v-if="details?.country"
-              >
-                <MapPinIcon class="h-4 w-4 shrink-0" />
-                <template v-if="details?.city && details?.city !== details?.country">
-                  {{ details?.city }},
-                </template>
-                <template v-else-if="details?.region && details?.region !== details?.country">
-                  {{ details?.region }},
-                </template>
-                {{ details?.country }}
-              </div>
-              <div class="flex items-center gap-1">
-                <ServerIcon class="h-4 w-4 shrink-0" />
-                {{ details?.organization }}
-              </div>
-            </div>
-          </div>
+            :ip="destinationIP!"
+          />
         </template>
       </div>
 
@@ -172,13 +146,13 @@
 </template>
 
 <script setup lang="ts">
-import { getIPInfo, type IPInfo } from '@/api/geoip'
 import { can } from '@/assembly/backend'
 import { getConnectionDisplayValue } from '@/assembly/connections'
 import { fetchDaeFlow } from '@/assembly/dae'
 import { proxyMap } from '@/assembly/proxies'
 import DialogWrapper from '@/components/common/DialogWrapper.vue'
 import ProxyChainPath from '@/components/common/ProxyChainPath.vue'
+import MultiSourceGeoInfo from '@/components/connections/MultiSourceGeoInfo.vue'
 import SegmentedControl, { type SegmentOption } from '@/components/common/SegmentedControl.vue'
 import ProxyGroupPanel from '@/components/proxies/ProxyGroupPanel.vue'
 import SourceIPLabels from '@/components/settings/connections/SourceIPLabels.vue'
@@ -188,12 +162,7 @@ import { getConnectionChains, getConnectionSourceIP, getDestinationFromConnectio
 import { getRequestErrorMessage } from '@/helper/request-error'
 import { PROXIES_PARENT_CLASS } from '@/helper/utils'
 import { proxyChainDirection } from '@/store/settings'
-import {
-  ArrowRightCircleIcon,
-  MapPinIcon,
-  PencilSquareIcon,
-  ServerIcon,
-} from '@heroicons/vue/24/outline'
+import { PencilSquareIcon } from '@heroicons/vue/24/outline'
 import type { DaeConnectionRawMessage, DaeFlowStep } from '@/types'
 import * as ipaddr from 'ipaddr.js'
 import { last } from 'lodash'
@@ -207,7 +176,6 @@ const KEY = CONNECTIONS_TABLE_ACCESSOR_KEY
 
 const { infoConn, connectionDetailModalShow } = useConnections()
 const { t } = useI18n()
-const details = ref<IPInfo | null>(null)
 const selectedProxy = ref('')
 const sourceIPDialogVisible = ref(false)
 const flowSteps = ref<DaeFlowStep[]>([])
@@ -265,9 +233,7 @@ const isPrivateIP = computed(() => {
 
   return ['private', 'uniqueLocal', 'loopback', 'linkLocal'].includes(range)
 })
-const showGeoInfo = computed(
-  () => isValidDestinationIP.value && !isPrivateIP.value && !!details.value,
-)
+const showGeoInfo = computed(() => isValidDestinationIP.value && !isPrivateIP.value)
 
 const proxyChainStart = computed(() => {
   if (!infoConn.value || !getConnectionChains(infoConn.value).length) {
@@ -371,25 +337,6 @@ watch(
   () => [activeTab.value, flowId.value] as const,
   ([tab]) => {
     if (tab === 'flow') loadFlow()
-  },
-)
-
-watch(
-  () => destinationIP.value,
-  (newIP) => {
-    if (!newIP || !isValidDestinationIP.value || isPrivateIP.value) {
-      details.value = null
-      return
-    }
-
-    if (details.value?.ip === newIP) {
-      return
-    }
-
-    details.value = null
-    getIPInfo(newIP).then((res) => {
-      details.value = res
-    })
   },
 )
 </script>
